@@ -1,0 +1,109 @@
+#!/usr/bin/env ruby
+
+require "nokogiri"
+require "net/http"
+require "optparse"
+require "uri"
+
+class WebsiteFetcher
+  class BadResponseError < StandardError
+  end
+
+  def initialize(urls = [], flags = {})
+    @urls = urls
+    @flags = flags
+  end
+
+  def perform
+    for url in @urls
+      begin
+        @parsed_url = parse_url(url)
+        html_body = fetch_html
+        fetch_and_print_metadata(html_body) if @flags[:show_metadata]
+        File.open("#{@parsed_url.host}.html", "w") { |f| f.write(html_body) }
+      rescue StandardError => e
+        $stderr.puts "Fetching Filed for: #{url}\n"
+        $stderr.puts "#{e.message}\n\n"
+        next
+      end
+    end
+  end
+
+  private
+
+  #
+  # Fetch the html source of the target website
+  # @return [String] html body
+  #
+  def fetch_html
+    response = Net::HTTP.get_response(@parsed_url)
+    if response.code.to_i > 299
+      raise BadResponseError,
+            "Response Status:[#{response.code}] for #{@parsed_url}"
+    end
+    response.body
+  end
+  #
+  # Fetch and Prints the metadata of the target website
+  # @return nil
+  #
+  def fetch_and_print_metadata(source)
+    parsed_source = Nokogiri.HTML(source)
+    link_count = parsed_source.xpath("//a[@href]").count
+    image_count = parsed_source.xpath("//img[@src]").count
+    $stdout.puts metadata_string_builder(
+                   link_count: link_count,
+                   image_count: image_count,
+                 )
+  end
+
+  #
+  # Build the print string of the metadata
+  # @return nil
+  #
+  def metadata_string_builder(link_count:, image_count:)
+    metadata_hash = {
+      site: @parsed_url.host,
+      num_links: link_count,
+      images: image_count,
+      last_fetch: Time.now.utc.strftime("%a %b %d %Y %H:%M %Z"),
+    }
+    sb = ""
+    metadata_hash.each { |key, value| sb += "#{key}: #{value}\n" }
+    sb += "\n"
+  end
+
+  #
+  # Validate and parse the url using URI.parse
+  # @return parsed URI
+  #
+  def parse_url(url)
+    parsed_url = URI.parse(url)
+    return parsed_url unless parsed_url.host.nil?
+    raise URI::InvalidURIError, "Invalid URL: #{url}"
+  end
+end
+
+# Driver Method
+if __FILE__ == $0
+  flags = {}
+
+  opt = OptionParser.new
+  opt.on("-h", "--help", "Help") do |v|
+    $stdout.puts "Supported flags:
+    -m / --metadata: Display the metadata of the target website
+    -h / --help:     Show all supported flags"
+    exit 0
+  end
+  opt.on("-m", "--metadata", "Display Metadata") do |v|
+    flags[:show_metadata] = true
+  end
+  opt.parse!(ARGV)
+
+  if ARGV.count < 1
+    $stderr.puts "Please input the url of target website. \nTry \"$ ./fetch https://www.google.com/\""
+    exit 1
+  end
+
+  WebsiteFetcher.new(ARGV, flags).perform
+end

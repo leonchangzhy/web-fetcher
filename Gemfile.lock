@@ -1,0 +1,20 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    net-http (0.3.0)
+      uri
+    nokogiri (1.13.9-aarch64-linux)
+      racc (~> 1.4)
+    racc (1.6.0)
+    uri (0.11.0)
+
+PLATFORMS
+  aarch64-linux
+
+DEPENDENCIES
+  net-http
+  nokogiri
+  uri
+
+BUNDLED WITH
+   2.3.7
