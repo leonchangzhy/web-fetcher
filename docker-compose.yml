@@ -1,13 +1,9 @@
 version: "3.9"
 
 services:
-  web_fetcher:
+  web-fetcher:
     build:
       context: .
       dockerfile: ./Dockerfile
     volumes:
       - .:/web_fetcher
-    ports:
-      - "3009:3009"
-    stdin_open: true
-    tty: true

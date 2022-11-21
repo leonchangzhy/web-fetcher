@@ -3,7 +3,9 @@
 require "nokogiri"
 require "net/http"
 require "optparse"
+require "fileutils"
 require "uri"
+require "json"
 
 class WebsiteFetcher
   class BadResponseError < StandardError
@@ -19,10 +21,10 @@ class WebsiteFetcher
       begin
         @parsed_url = parse_url(url)
         html_body = fetch_html
-        fetch_and_print_metadata(html_body) if @flags[:show_metadata]
-        File.open("#{@parsed_url.host}.html", "w") { |f| f.write(html_body) }
+        metadata_hash = fetch_metadata(html_body)
+        save_to_local(html_body: html_body, metadata: metadata_hash)
       rescue StandardError => e
-        $stderr.puts "Fetching Filed for: #{url}\n"
+        $stderr.puts "Process Filed for: #{url}\n"
         $stderr.puts "#{e.message}\n\n"
         next
       end
@@ -31,6 +33,30 @@ class WebsiteFetcher
 
   private
 
+  def save_to_local(html_body:, metadata:)
+    # .strftime("%a %b %d %Y %H:%M %Z")
+    FileUtils.mkdir_p @parsed_url.host
+    file_data = []
+    if File.exists?("#{@parsed_url.host}/metadata.json")
+      file_data = JSON.parse(File.read("#{@parsed_url.host}/metadata.json"))
+    end
+    previous_fetch_time = nil
+    previous_fetch_time = file_data[-1]["fetch_time"] if !file_data.empty?
+
+    file_data.push metadata
+    File.open("#{@parsed_url.host}/metadata.json", "w") do |f|
+      f.write(file_data.to_json)
+    end
+    File.open("#{@parsed_url.host}/#{@parsed_url.host}.html", "w") do |f|
+      f.write(html_body)
+    end
+    if @flags[:show_metadata]
+      $stdout.puts metadata_string_builder(
+                     metadata_hash: metadata,
+                     previous_fetch_time: previous_fetch_time,
+                   )
+    end
+  end
   #
   # Fetch the html source of the target website
   # @return [String] html body
@@ -44,32 +70,29 @@ class WebsiteFetcher
     response.body
   end
   #
-  # Fetch and Prints the metadata of the target website
+  # Fetch the metadata of the target website
   # @return nil
   #
-  def fetch_and_print_metadata(source)
+  def fetch_metadata(source)
     parsed_source = Nokogiri.HTML(source)
     link_count = parsed_source.xpath("//a[@href]").count
     image_count = parsed_source.xpath("//img[@src]").count
-    $stdout.puts metadata_string_builder(
-                   link_count: link_count,
-                   image_count: image_count,
-                 )
+    metadata_hash = {
+      site: @parsed_url.host,
+      num_links: link_count,
+      images: image_count,
+      fetch_time: Time.now.utc.strftime("%a %b %d %Y %H:%M:%S %Z"),
+    }
   end
 
   #
   # Build the print string of the metadata
   # @return nil
   #
-  def metadata_string_builder(link_count:, image_count:)
-    metadata_hash = {
-      site: @parsed_url.host,
-      num_links: link_count,
-      images: image_count,
-      last_fetch: Time.now.utc.strftime("%a %b %d %Y %H:%M %Z"),
-    }
+  def metadata_string_builder(metadata_hash:, previous_fetch_time:)
     sb = ""
     metadata_hash.each { |key, value| sb += "#{key}: #{value}\n" }
+    sb += "previous_fetch_time: #{previous_fetch_time || "--"}\n"
     sb += "\n"
   end
 
@@ -101,7 +124,7 @@ if __FILE__ == $0
   opt.parse!(ARGV)
 
   if ARGV.count < 1
-    $stderr.puts "Please input the url of target website. \nTry \"$ ./fetch https://www.google.com/\""
+    $stderr.puts "Please input the url of target website. \nTry \"./fetch https://www.google.com/\""
     exit 1
   end
 
