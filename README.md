@@ -4,9 +4,9 @@
 
 A simple web fetcher that fetches and saves the target website and its metadata into the folder with the same name as the website domain.
 
-#### Next Act
-
-To allow the saved website can be fully offline accessed, in future we could download and save all the assets into the folder of this website and localize them by changing all the src of the assets to local relative path of the downloaded files.
+```sh
+./fetch https://www.google.com -a
+```
 
 ## Installation & Run
 
@@ -42,6 +42,16 @@ docker-compose run web-fetcher bash
 
 ```sh
 ./fetch https://www.google.com --metadata
+```
+
+- Archive Asset
+
+```sh
+./fetch https://www.google.com -a
+```
+
+```sh
+./fetch https://www.google.com --archive
 ```
 
 ### You can also directly run the program by appending the command after docker-compose run

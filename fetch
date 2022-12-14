@@ -6,6 +6,7 @@ require "optparse"
 require "fileutils"
 require "uri"
 require "json"
+require "securerandom"
 
 class WebsiteFetcher
   class BadResponseError < StandardError
@@ -20,9 +21,9 @@ class WebsiteFetcher
     for url in @urls
       begin
         @parsed_url = parse_url(url)
-        html_body = fetch_html
-        metadata_hash = fetch_metadata(html_body)
-        save_to_local(html_body: html_body, metadata: metadata_hash)
+        @html_body = http_get(@parsed_url)
+        metadata_hash = fetch_metadata_and_archive_assets
+        save_to_local(html_body: @html_body, metadata: metadata_hash)
       rescue StandardError => e
         $stderr.puts "Process Filed for: #{url}\n"
         $stderr.puts "#{e.message}\n\n"
@@ -33,8 +34,11 @@ class WebsiteFetcher
 
   private
 
+  #
+  # Save the html and metadata to local
+  # @return nil
+  #
   def save_to_local(html_body:, metadata:)
-    # .strftime("%a %b %d %Y %H:%M %Z")
     FileUtils.mkdir_p @parsed_url.host
     file_data = []
     if File.exists?("#{@parsed_url.host}/metadata.json")
@@ -57,26 +61,36 @@ class WebsiteFetcher
                    )
     end
   end
+
   #
-  # Fetch the html source of the target website
-  # @return [String] html body
+  # Fetch the response of the target url
+  # @return {String} response body
   #
-  def fetch_html
-    response = Net::HTTP.get_response(@parsed_url)
+  def http_get(url)
+    response = Net::HTTP.get_response(url)
     if response.code.to_i > 299
-      raise BadResponseError,
-            "Response Status:[#{response.code}] for #{@parsed_url}"
+      raise BadResponseError, "Response Status:[#{response.code}] for #{url}"
     end
     response.body
   end
+
   #
-  # Fetch the metadata of the target website
-  # @return nil
+  # Fetch the metadata of the target website and download the assets
+  # @return {Hash} metadata
   #
-  def fetch_metadata(source)
-    parsed_source = Nokogiri.HTML(source)
+  def fetch_metadata_and_archive_assets
+    parsed_source = Nokogiri.HTML(@html_body)
     link_count = parsed_source.xpath("//a[@href]").count
-    image_count = parsed_source.xpath("//img[@src]").count
+    images = parsed_source.xpath("//img[@src]")
+    image_count = images.count
+
+    if @flags[:archive]
+      images.each do |tag|
+        archive(tag, :src, File.join(@parsed_url.host, "images"))
+      end
+      @html_body = parsed_source.to_html
+    end
+
     metadata_hash = {
       site: @parsed_url.host,
       num_links: link_count,
@@ -87,12 +101,15 @@ class WebsiteFetcher
 
   #
   # Build the print string of the metadata
-  # @return nil
+  # @return {String} output string
   #
   def metadata_string_builder(metadata_hash:, previous_fetch_time:)
     sb = ""
+    sb += "======================================================"
+    sb += "\n"
     metadata_hash.each { |key, value| sb += "#{key}: #{value}\n" }
     sb += "previous_fetch_time: #{previous_fetch_time || "--"}\n"
+    sb += "======================================================"
     sb += "\n"
   end
 
@@ -105,6 +122,64 @@ class WebsiteFetcher
     return parsed_url unless parsed_url.host.nil?
     raise URI::InvalidURIError, "Invalid URL: #{url}"
   end
+
+  ######################
+  #### Extra Credit ####
+  ######################
+
+  #
+  # Archive the assets and transform the url to relative path in html
+  # @return nil
+  #
+  def archive(html_tag, key, local_dirctory)
+    raw_asset_url = html_tag[key]
+    full_asset_url = full_url_for_asset(raw_asset_url)
+    relative_path =
+      transform_url_to_relative_path(raw_asset_url, local_dirctory)
+    download_assets(full_asset_url, relative_path)
+    html_tag[key.to_s] = relative_path.partition(
+      "#{File.dirname(local_dirctory)}/",
+    ).last
+  rescue StandardError => e
+    $stderr.puts "Skipping archive 1 asset for #{@parsed_url.host}, #{e.message[0, 18]}"
+  end
+
+  #
+  # Download the assets to local
+  # @return nil
+  #
+  def download_assets(asset_url, relative_path)
+    FileUtils.mkdir_p File.dirname(relative_path)
+    asset_uri_object = URI.parse(asset_url)
+    unless asset_uri_object.host.nil?
+      data = http_get asset_uri_object
+      File.open(relative_path, "wb") { |f| f.write(data) } if data
+    end
+  end
+
+  #
+  # Transform the url to relative path
+  # @return nil
+  #
+  def transform_url_to_relative_path(raw_url, local_dirctory)
+    relative_path = raw_url.gsub(%r{^https?\://(www.)?}, "")
+    relative_path.gsub!(%r{^[./]+}, "")
+    relative_path.gsub!(%r{[^-_./[:alnum:]]}, "_")
+    # Handle the case when file name is too long
+    if relative_path.size > 255
+      relative_path = SecureRandom.uuid + File.extname(relative_path)
+    end
+    File.join(local_dirctory, relative_path)
+  end
+
+  #
+  # Get the full url of the asset
+  # @return nil
+  #
+  def full_url_for_asset(raw_asset_url)
+    return raw_asset_url if URI.parse(raw_asset_url).absolute?
+    File.join(@parsed_url.origin, raw_asset_url)
+  end
 end
 
 # Driver Method
@@ -115,12 +190,14 @@ if __FILE__ == $0
   opt.on("-h", "--help", "Help") do |v|
     $stdout.puts "Supported flags:
     -m / --metadata: Display the metadata of the target website
+    -a / --archive: Archive the assets of the target website
     -h / --help:     Show all supported flags"
     exit 0
   end
   opt.on("-m", "--metadata", "Display Metadata") do |v|
     flags[:show_metadata] = true
   end
+  opt.on("-a", "--archive", "Archive Assets") { |v| flags[:archive] = true }
   opt.parse!(ARGV)
 
   if ARGV.count < 1
@@ -128,5 +205,5 @@ if __FILE__ == $0
     exit 1
   end
 
-  WebsiteFetcher.new(ARGV, flags).perform
+  WebsiteFetcher.new(ARGV.uniq, flags).perform
 end
